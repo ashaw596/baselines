@@ -1,8 +1,11 @@
+from tensorflow.contrib import slim
+
 from baselines.common.mpi_running_mean_std import RunningMeanStd
 import baselines.common.tf_util as U
 import tensorflow as tf
 import gym
 from baselines.common.distributions import make_pdtype
+import numpy as np
 
 class MlpPolicy(object):
     recurrent = False
@@ -11,7 +14,7 @@ class MlpPolicy(object):
             self._init(*args, **kwargs)
             self.scope = tf.get_variable_scope().name
 
-    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, gaussian_fixed_var=True):
+    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, bandwidth, num_neurons, gaussian_fixed_var=True):
         assert isinstance(ob_space, gym.spaces.Box)
 
         self.pdtype = pdtype = make_pdtype(ac_space)
@@ -24,13 +27,25 @@ class MlpPolicy(object):
 
         obz = tf.clip_by_value((ob - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)
         last_out = obz
-        for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(U.dense(last_out, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+
+        # for i in range(num_hid_layers):
+        #     last_out = tf.nn.tanh(U.dense(last_out, hid_size, "vffc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
         self.vpred = U.dense(last_out, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:,0]
 
         last_out = obz
-        for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(U.dense(last_out, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+        # for i in range(num_hid_layers):
+        #     last_out = tf.nn.tanh(U.dense(last_out, hid_size, "polfc%i"%(i+1), weight_init=U.normc_initializer(1.0)))
+        last_out = slim.fully_connected(
+            last_out,
+            num_neurons,
+            # activation_fn=tf.nn.tanh,
+            activation_fn=None,
+            weights_initializer=tf.random_normal_initializer(stddev=1.0 / bandwidth),
+            # weights_initializer=tf.truncated_normal_initializer(stddev=0.003),
+            biases_initializer=tf.random_uniform_initializer(minval=-np.pi, maxval=np.pi),
+            trainable=False)
+
+        last_out = tf.sin(last_out)
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = U.dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
             logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer())
